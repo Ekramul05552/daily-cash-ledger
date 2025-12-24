@@ -1,0 +1,240 @@
+const ledgerBody = document.getElementById('ledgerBody');
+// Your new updated Web App URL
+const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbwGUmKiG3FloQ_9PpglTwtCBSn_4dbjPuoK5b47a4fGrqwYjTdy0Rj8TieFB2N1z4Nj/exec'; 
+let myChart;
+
+// 1. Functional Search Bar
+document.getElementById('searchInput').addEventListener('input', function(e) {
+    const term = e.target.value.toLowerCase();
+    const rows = ledgerBody.querySelectorAll('tr');
+    
+    rows.forEach(row => {
+        const particular = row.querySelector('.p-input').value.toLowerCase();
+        const remark = row.querySelector('.remark-input').value.toLowerCase();
+        const date = row.cells[0].querySelector('input').value.toLowerCase();
+        
+        const match = particular.includes(term) || remark.includes(term) || date.includes(term);
+        row.style.display = match ? '' : 'none';
+    });
+});
+
+// 2. Excel Export
+function downloadExcel() {
+    let csv = [];
+    const rows = document.querySelectorAll("table tr");
+    for (let i = 0; i < rows.length; i++) {
+        if (rows[i].style.display !== 'none') {
+            let row = [], cols = rows[i].querySelectorAll("td, th");
+            for (let j = 0; j < cols.length; j++) {
+                if (j === 6) continue; 
+                let data = "";
+                const input = cols[j].querySelector("input");
+                data = input ? input.value : cols[j].innerText.replace(/৳|,/g, "");
+                row.push('"' + data.toString().replace(/"/g, '""') + '"');
+            }
+            csv.push(row.join(","));
+        }
+    }
+    const csvFile = new Blob([csv.join("\n")], { type: "text/csv" });
+    const downloadLink = document.createElement("a");
+    downloadLink.download = `EME_AIR_Ledger_${new Date().toISOString().split('T')[0]}.csv`;
+    downloadLink.href = window.URL.createObjectURL(csvFile);
+    downloadLink.click();
+}
+
+// 3. Mini Invoice (Money Receipt)
+function printRowInvoice(btn) {
+    const row = btn.closest('tr');
+    const desc = row.querySelector('.p-input').value;
+    const cin = row.querySelector('.cashIn').value;
+    const date = row.cells[0].querySelector('input').value;
+    const remark = row.querySelector('.remark-input').value || "Service Payment";
+    const serial = "EI-" + Math.floor(100000 + Math.random() * 900000);
+
+    const win = window.open('', '_blank');
+    win.document.write(`
+        <html><head><title>Receipt - EME AIR INTERNATIONAL</title>
+        <style>
+            @page { size: A4; margin: 20mm; }
+            body { font-family: 'Inter', sans-serif; padding: 20px; color: #1e293b; background: #fff; }
+            .receipt { border: 2px solid #1e293b; padding: 40px; width: 100%; box-sizing: border-box; border-radius: 8px; min-height: 250mm; position: relative; }
+            .header { text-align: center; border-bottom: 2px solid #1e293b; padding-bottom: 20px; }
+            .header img { height: 80px; margin-bottom: 10px; }
+            .title { font-size: 28px; font-weight: 800; text-decoration: underline; margin-top: 10px; }
+            .details { margin: 60px 0; font-size: 22px; line-height: 3; }
+            .line { border-bottom: 1.5px dotted #64748b; font-weight: 600; padding: 0 10px; min-width: 250px; display: inline-block; }
+            .amount-box { border: 3px solid #1e293b; display: inline-block; padding: 15px 40px; font-size: 32px; font-weight: 800; background: #f8fafc; margin-top: 20px; }
+            .footer { margin-top: 120px; display: flex; justify-content: space-between; font-weight: bold; font-size: 18px; }
+            .sign-area { border-top: 2px solid #000; width: 220px; text-align: center; padding-top: 10px; }
+            .no-print-btn { background: #2563eb; color: white; padding: 15px 30px; border: none; border-radius: 5px; font-weight: bold; cursor: pointer; margin-top: 20px; }
+            @media print { .no-print { display: none !important; } }
+        </style></head><body>
+            <div class="receipt">
+                <div class="header">
+                    <img src="assets/logo.png" onerror="this.style.display='none'">
+                    <div class="title">MONEY RECEIPT</div>
+                    <p style="font-size: 18px;">Serial No: <b>${serial}</b></p>
+                </div>
+                <div class="details">
+                    Date: <span class="line" contenteditable="true">${date}</span><br>
+                    Received From: <span class="line" contenteditable="true">${desc}</span><br>
+                    Purpose of Payment: <span class="line" contenteditable="true">${remark}</span>
+                </div>
+                <div class="amount-box">TOTAL BDT: ৳<span contenteditable="true">${parseFloat(cin).toLocaleString()}</span></div>
+                <div class="footer">
+                    <div class="sign-area" contenteditable="true">Customer Signature</div>
+                    <div class="sign-area" contenteditable="true">Authorized Seal & Sign</div>
+                </div>
+            </div>
+            <div style="text-align:center;" class="no-print">
+                <button class="no-print-btn" onclick="window.print()">Click to Print Receipt</button>
+            </div>
+        </body></html>
+    `);
+    win.document.close();
+}
+
+// 4. Cloud Sync Logic with Animation & Status
+async function syncToCloud(isAuto = false) {
+    const status = document.getElementById('saveStatus');
+    const saveBtn = document.getElementById('saveLedger');
+    const month = document.getElementById('monthPicker').value;
+    
+    if(!isAuto) {
+        status.innerText = "⏳ Syncing to Cloud...";
+        status.style.color = "#2563eb";
+        saveBtn.classList.add('loading-pulse');
+        saveBtn.innerHTML = "⌛ Saving...";
+    }
+    
+    const rows = [];
+    ledgerBody.querySelectorAll('tr').forEach(tr => {
+        rows.push({
+            date: tr.cells[0].querySelector('input').value,
+            particular: tr.cells[1].querySelector('input').value,
+            cashIn: tr.cells[2].querySelector('input').value,
+            cashOut: tr.cells[3].querySelector('input').value,
+            balance: tr.cells[4].innerText.replace('৳','').replace(/,/g,''),
+            remark: tr.cells[5].querySelector('input').value
+        });
+    });
+
+    try {
+        await fetch(WEB_APP_URL, { 
+            method: 'POST', 
+            mode: 'no-cors', 
+            body: JSON.stringify({ month, rows }) 
+        });
+
+        if(!isAuto) { 
+            const now = new Date().toLocaleTimeString();
+            status.innerText = `✅ Last Synced: ${now}`;
+            status.style.color = "#059669";
+            saveBtn.classList.remove('loading-pulse');
+            saveBtn.innerHTML = "💾 Save";
+        }
+    } catch (e) { 
+        console.error(e); 
+        if(!isAuto) {
+            status.innerText = "❌ Sync Failed";
+            status.style.color = "#dc2626";
+            saveBtn.classList.remove('loading-pulse');
+            saveBtn.innerHTML = "💾 Save";
+        }
+    }
+}
+
+async function loadFromCloud() {
+    const status = document.getElementById('saveStatus');
+    const month = document.getElementById('monthPicker').value;
+    status.innerText = "📂 Loading...";
+    try {
+        const res = await fetch(`${WEB_APP_URL}?month=${month}`);
+        const data = await res.json();
+        if(data.length > 0) { 
+            ledgerBody.innerHTML = ""; 
+            data.forEach(r => addRow(r)); 
+            status.innerText = "✅ Data Loaded"; 
+        } else {
+            status.innerText = "ℹ️ No data for this month";
+        }
+    } catch (e) { 
+        status.innerText = "❌ Load failed"; 
+    }
+}
+
+// 5. Calculation Logic
+function calculateLedger() {
+    let tIn = 0, tOut = 0, bal = 0;
+    ledgerBody.querySelectorAll('tr').forEach(row => {
+        const cin = parseFloat(row.querySelector('.cashIn').value) || 0;
+        const cout = parseFloat(row.querySelector('.cashOut').value) || 0;
+        tIn += cin; tOut += cout; bal += (cin - cout);
+        row.querySelector('.balance-col').innerText = '৳' + bal.toLocaleString();
+    });
+    document.getElementById('totalIn').innerText = '৳' + tIn.toLocaleString();
+    document.getElementById('totalOut').innerText = '৳' + tOut.toLocaleString();
+    document.getElementById('netBalance').innerText = '৳' + bal.toLocaleString();
+    
+    const netCard = document.getElementById('netCard');
+    bal < 0 ? netCard.classList.add('negative-bal') : netCard.classList.remove('negative-bal');
+    updateChart(tIn, tOut);
+}
+
+function updateChart(tIn, tOut) {
+    const ctx = document.getElementById('categoryChart').getContext('2d');
+    if (myChart) myChart.destroy();
+    myChart = new Chart(ctx, {
+        type: 'doughnut',
+        data: { labels: ['In', 'Out'], datasets: [{ data: [tIn, tOut], backgroundColor: ['#059669', '#dc2626'] }] },
+        options: { maintainAspectRatio: false }
+    });
+}
+
+// 6. Table UI Controls
+function addRow(data = {}) {
+    const row = document.createElement('tr');
+    row.innerHTML = `
+        <td><input type="date" value="${data.date || new Date().toISOString().split('T')[0]}"></td>
+        <td><input type="text" class="p-input" value="${data.particular || ''}"></td>
+        <td><input type="number" class="cashIn" value="${data.cashIn || 0}"></td>
+        <td><input type="number" class="cashOut" value="${data.cashOut || 0}"></td>
+        <td class="balance-col" style="font-weight:700;">৳0</td>
+        <td><input type="text" class="remark-input" value="${data.remark || ''}"></td>
+        <td class="no-print"><button onclick="printRowInvoice(this)" class="btn-inv">📄</button>
+        <button onclick="this.closest('tr').remove(); calculateLedger();" class="btn-del">×</button></td>
+    `;
+    row.addEventListener('input', calculateLedger);
+    ledgerBody.appendChild(row);
+    calculateLedger();
+}
+
+function toggleDarkMode() {
+    const body = document.documentElement;
+    const isDark = body.getAttribute('data-theme') === 'dark';
+    const newTheme = isDark ? 'light' : 'dark';
+    body.setAttribute('data-theme', newTheme);
+    localStorage.setItem('theme', newTheme);
+    document.getElementById('themeToggle').innerText = newTheme === 'dark' ? '☀️' : '🌙';
+}
+
+// 7. Init & Events
+document.getElementById('saveLedger').addEventListener('click', () => syncToCloud());
+document.getElementById('loadLedger').addEventListener('click', loadFromCloud);
+document.getElementById('usdInput').addEventListener('input', () => {
+    const res = (parseFloat(document.getElementById('usdInput').value) || 0) * (parseFloat(document.getElementById('rateInput').value) || 122);
+    document.getElementById('bdtResult').innerText = '৳' + res.toLocaleString();
+});
+
+document.addEventListener('DOMContentLoaded', () => {
+    if(ledgerBody.rows.length === 0) addRow();
+    const savedTheme = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', savedTheme);
+    if(savedTheme === 'dark') document.getElementById('themeToggle').innerText = '☀️';
+    
+    // Auto-sync every 5 minutes
+    setInterval(() => syncToCloud(true), 300000); 
+});
+
+function applyTemplate(p, ci, co, r) { addRow({particular: p, cashIn: ci, cashOut: co, remark: r}); }
+function ticketSalePrompt() { const air = prompt("Airline:"); if(air) addRow({particular: `Ticket Sale - ${air.toUpperCase()}`, remark: "Booking"}); }

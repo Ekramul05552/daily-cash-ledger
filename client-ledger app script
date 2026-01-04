@@ -1,0 +1,181 @@
+/**
+ * EME AIR INTERNATIONAL - Core Backend
+ * Grid Logic: 
+ * - Row 1: Jan (A-G), Feb (J-P), Mar (S-Y)
+ * - Row 2: Apr (A-G), May (J-P), Jun (S-Y)
+ * Gaps: H-I, Q-R, Z
+ */
+
+const ROW_GAP = 35; // Vertical space between table sets (approx 30 rows + 5 padding)
+const START_ROW = 10; // Starts from Row 10 to leave space for Yearly Summary at top
+
+function onOpen() {
+  SpreadsheetApp.getUi().createMenu('EME Admin')
+    .addItem('Update Master Dashboard', 'generateDashboard')
+    .addToUi();
+}
+
+/**
+ * Handle POST requests from the web app (Saving data)
+ */
+function doPost(e) {
+  try {
+    const data = JSON.parse(e.postData.contents);
+    if (data.type === 'save') {
+      const result = saveToGrid(data);
+      return ContentService.createTextOutput(result);
+    }
+  } catch (err) {
+    return ContentService.createTextOutput("Error: " + err.message);
+  }
+}
+
+/**
+ * Handle GET requests (Loading data and Dashboard)
+ */
+function doGet(e) {
+  const type = e.parameter.type;
+  
+  if (type === 'dashboard') {
+    return ContentService.createTextOutput(JSON.stringify(getDashboardData()))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+  
+  const data = loadFromGrid(e.parameter.client, e.parameter.monthYear);
+  return ContentService.createTextOutput(JSON.stringify(data))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
+ * Logic to find the exact cell coordinate for a specific month
+ */
+function getTablePosition(monthYear) {
+  const date = new Date(monthYear + "-01");
+  const mIdx = date.getMonth(); // 0 (Jan) to 11 (Dec)
+  
+  const gridRow = Math.floor(mIdx / 3); // 0 for Jan-Mar, 1 for Apr-Jun, etc.
+  const gridCol = mIdx % 3; // 0 (Col A), 1 (Col J), 2 (Col S)
+  
+  const row = START_ROW + (gridRow * ROW_GAP);
+  const colMap = [1, 10, 19]; // Spreadsheet columns A, J, S
+  
+  return { row: row, col: colMap[gridCol] };
+}
+
+/**
+ * Save data to the specific grid location
+ */
+function saveToGrid(payload) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(payload.client) || ss.insertSheet(payload.client);
+  const pos = getTablePosition(payload.monthYear);
+
+  // 1. Clear existing area for the month to avoid overlap
+  sheet.getRange(pos.row - 1, pos.col, ROW_GAP - 2, 7).clearContent().clearFormat();
+
+  // 2. Set Month Title
+  sheet.getRange(pos.row - 1, pos.col, 1, 7).merge()
+       .setValue(payload.monthYear.toUpperCase())
+       .setBackground("#1e40af")
+       .setFontColor("white")
+       .setFontWeight("bold")
+       .setHorizontalAlignment("center");
+  
+  // 3. Set Headers
+  const headers = [["Name", "Address", "Date", "Road/Carrier", "ReceivedBy", "Bill", "Receive"]];
+  sheet.getRange(pos.row, pos.col, 1, 7).setValues(headers)
+       .setFontWeight("bold")
+       .setBorder(true, true, true, true, true, true);
+
+  // 4. Set Data
+  if (payload.rows && payload.rows.length > 0) {
+    const vals = payload.rows.map(r => [
+      r.name, r.address, r.date, r.carrier, r.receivedBy, r.bill, r.receive
+    ]);
+    sheet.getRange(pos.row + 1, pos.col, vals.length, 7).setValues(vals)
+         .setBorder(true, true, true, true, true, true);
+  }
+
+  updateYearlySummary(sheet);
+  generateDashboard();
+  return "Success";
+}
+
+/**
+ * Yearly Summary logic (Top of Client Sheet)
+ */
+function updateYearlySummary(sheet) {
+  // Setup Summary Header
+  sheet.getRange(2, 1, 1, 5).setValues([["Yearly Summary", "", "Total Billed", "Total Received", "Net Due"]])
+       .setBackground("#000000").setFontColor("white").setFontWeight("bold");
+  
+  // Sum formulas for the 3 grid columns (Bill Amount: F, O, X | Received: G, P, Y)
+  sheet.getRange(3, 3).setFormula("=SUM(F10:F1000, O10:O1000, X10:X1000)"); 
+  sheet.getRange(3, 4).setFormula("=SUM(G10:G1000, P10:P1000, Y10:Y1000)"); 
+  sheet.getRange(3, 5).setFormula("=C3-D3");
+  
+  sheet.getRange(3, 3, 1, 3).setNumberFormat("৳#,##0").setFontWeight("bold");
+}
+
+/**
+ * Scans all sheets and populates the DASHBOARD sheet
+ */
+function generateDashboard() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let dash = ss.getSheetByName("DASHBOARD") || ss.insertSheet("DASHBOARD", 0);
+  dash.clear();
+  
+  const header = [["CLIENT NAME", "TOTAL BILLED", "TOTAL RECEIVED", "TOTAL DUE", "STATUS", "LAST UPDATED"]];
+  const data = [];
+  
+  ss.getSheets().forEach(s => {
+    const sName = s.getName();
+    if (sName !== "DASHBOARD") {
+      const billed = s.getRange("C3").getValue() || 0;
+      const received = s.getRange("D3").getValue() || 0;
+      const due = s.getRange("E3").getValue() || 0;
+      const status = (due > 0) ? "⚠️ Pending" : "✅ Paid";
+      data.push([sName, billed, received, due, status, new Date()]);
+    }
+  });
+
+  dash.getRange(1, 1, 1, 6).setValues(header).setBackground("#1e293b").setFontColor("white");
+  if (data.length > 0) {
+    dash.getRange(2, 1, data.length, 6).setValues(data);
+    dash.getRange(2, 2, data.length, 3).setNumberFormat("৳#,##0");
+  }
+}
+
+/**
+ * Retrieve Dashboard data for the Web App
+ */
+function getDashboardData() {
+  const dash = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("DASHBOARD");
+  if (!dash) return [];
+  const vals = dash.getDataRange().getValues();
+  vals.shift(); // Remove header
+  return vals.map(r => ({
+    name: r[0], billed: r[1], received: r[2], due: r[3], status: r[4]
+  }));
+}
+
+/**
+ * Load specific client data for a specific month
+ */
+function loadFromGrid(client, monthYear) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(client);
+  if (!sheet) return [];
+  
+  const pos = getTablePosition(monthYear);
+  const data = sheet.getRange(pos.row + 1, pos.col, 30, 7).getValues();
+  
+  return data.filter(r => r[0] !== "").map(r => ({
+    name: r[0], 
+    address: r[1], 
+    date: r[2] ? Utilities.formatDate(new Date(r[2]), "GMT+6", "yyyy-MM-dd") : "",
+    carrier: r[3], 
+    receivedBy: r[4], 
+    bill: r[5], 
+    receive: r[6]
+  }));
+}

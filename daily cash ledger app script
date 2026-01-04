@@ -1,0 +1,75 @@
+function doPost(e) {
+  if (!e || !e.postData) {
+    return ContentService.createTextOutput("Error: No data received").setMimeType(ContentService.MimeType.TEXT);
+  }
+
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const data = JSON.parse(e.postData.contents);
+    const type = data.type || 'main'; // Default to 'main' if not specified
+    const monthName = data.month || new Date().toISOString().slice(0, 7); // Default to current month if not provided
+    
+    let sheetName;
+    let headers;
+    if (type === 'client' || type === 'client_ledger') {
+      sheetName = 'Client-' + monthName;
+      headers = ["Name", "Address", "Date", "Road Carrier", "Received By", "Bill Amount", "Receive", "Total", "Due Balance", "Travel Date"];
+    } else {
+      sheetName = monthName;
+      headers = ["Date", "Particular", "Cash In", "Cash Out", "Balance", "Remark"];
+    }
+    
+    let sheet = ss.getSheetByName(sheetName);
+    if (!sheet) {
+      sheet = ss.insertSheet(sheetName);
+      sheet.appendRow(headers);
+    } else {
+      sheet.clearContents();
+      sheet.appendRow(headers);
+    }
+
+    if (data.rows && data.rows.length > 0) {
+      let rows;
+      if (type === 'client' || type === 'client_ledger') {
+        rows = data.rows.map(r => [r.name || r[0], r.address || r[1], r.date || r[2], r.carrier || r.roadCarrier || r[3], r.receivedBy || r[4], r.bill || r[5], r.receive || r[6], r.total || r[7], r.due || r[8], r.travelDate || r[9]]);
+      } else {
+        rows = data.rows.map(r => [r.date, r.particular, r.cashIn, r.cashOut, r.balance, r.remark]);
+      }
+      sheet.getRange(2, 1, rows.length, headers.length).setValues(rows);
+    }
+    
+    return ContentService.createTextOutput(JSON.stringify({ status: "success" }))
+      .setMimeType(ContentService.MimeType.JSON);
+      
+  } catch (error) {
+    return ContentService.createTextOutput(JSON.stringify({ status: "error", message: error.toString() }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function doGet(e) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const monthName = e.parameter.month;
+  const type = e.parameter.type || 'main';
+  
+  let sheetName;
+  if (type === 'client') {
+    sheetName = 'Client-' + monthName;
+  } else {
+    sheetName = monthName;
+  }
+  
+  const sheet = ss.getSheetByName(sheetName);
+  if (!sheet) return ContentService.createTextOutput(JSON.stringify([])).setMimeType(ContentService.MimeType.JSON);
+  const data = sheet.getDataRange().getValues();
+  data.shift(); // Remove headers
+  
+  let json;
+  if (type === 'client') {
+    json = data.map(r => ({ name: r[0], address: r[1], date: r[2], roadCarrier: r[3], receivedBy: r[4], billAmount: r[5], receive: r[6], total: r[7], dueBalance: r[8], travelDate: r[9] }));
+  } else {
+    json = data.map(r => ({ date: r[0], particular: r[1], cashIn: r[2], cashOut: r[3], balance: r[4], remark: r[5] }));
+  }
+  
+  return ContentService.createTextOutput(JSON.stringify(json)).setMimeType(ContentService.MimeType.JSON);
+}
